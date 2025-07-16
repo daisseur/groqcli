@@ -312,7 +312,7 @@ def chat(
     if system:
         system_msg = {"role": "system", "content": get_system_prompt(system) or system}
     else:
-        system_msg = {"role": "system", "content": get_system_prompt["default"]}
+        system_msg = {"role": "system", "content": get_system_prompt("default") or ''}
 
     # If messages start with system, replace it, else insert
     if messages and messages[0]["role"] == "system":
