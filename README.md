@@ -1,6 +1,8 @@
-# GroqCLI
+# groqcli (groq-tool)
 
 A Modern Command-Line Tool for Interacting with Grog LLMs
+
+[![Upload Python Package](https://github.com/daisseur/groqcli/actions/workflows/python-publish.yml/badge.svg)](https://github.com/daisseur/groqcli/actions/workflows/python-publish.yml)
 
 ## Table of Contents
 
@@ -19,17 +21,17 @@ A Modern Command-Line Tool for Interacting with Grog LLMs
 ### 1. **Direct Prompt**
 
 * Run a command with a direct prompt
-* Example: `groqcli "Explain black holes in 3 points"`
+* Example: `groqcli chat "Explain black holes in 3 points"`
 
 ### 2. **File-Based Prompt**
 
 * Run a command with a file-based prompt
-* Example: `groqcli my_file.txt`
+* Example: `groqcli chat my_file.txt`
 
 ### 3. **Predefined System Prompts**
 
 * Use predefined system prompts to customize the response
-* Example: `groqcli "Transform this script into TypeScript" --system formatScript`
+* Example: `groqcli chat "Transform this script into TypeScript" --system formatScript`
 * Available: `uwu`, `formatScript`, `friendly`, `tech`, `json`, `default`, `fr-default`
 
 ### 4. **Save Conversation**
@@ -75,13 +77,18 @@ A Modern Command-Line Tool for Interacting with Grog LLMs
 ### Using pipx (Recommended)
 
 ```bash
+pipx install groq-tool
+```
+
+
+```bash
 pipx install git+https://github.com/daisseur/groqcli.git
 ```
 
 ### Using pip
 
 ```bash
-pip install groqcli
+pip install groq-tool
 ```
 
 ### From Source
