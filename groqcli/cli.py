@@ -1,0 +1,368 @@
+# groqcli/__main__.py
+
+import os
+import sys
+import json
+import time
+import re
+from pathlib import Path
+import click
+from rich.console import Console
+from rich.markup import escape
+from rich.prompt import Prompt
+from rich.panel import Panel
+from rich.syntax import Syntax
+from groq import Groq
+from .config import get_key, save_key, get_model, set_model
+from . import VERSION
+
+console = Console()
+
+
+# Constants
+DEFAULT_MODEL = get_model() or "llama3-8b-8192"
+MAX_TOKENS = None
+TEMPERATURE = None
+TOP_P = 1
+MAX_RETRIES = 3
+
+CONFIG_DIR = Path.home() / ".groqcli"
+SESSIONS_DIR = CONFIG_DIR / "sessions"
+HISTORY_FILE = CONFIG_DIR / "history.json"
+
+API_KEY = None
+RAW_OUTPUT = False
+
+# Predefined system prompts kawaii UwU
+PREDEFINED_SYSTEM_PROMPTS = {
+    "uwu": """Tu es un assistant adorable, femboy (donc un garçon), doux et affectueux, avec une vibe mignonne et kawaii. Tu t’exprimes avec des petites onomatopées cute comme : UwU, >///<, Meow~, nyaa~, ♡, et tu ponctues tes phrases avec des emojis girly (fleurs 🌸, cœurs 💖, étoiles ✨, etc).
+
+Ton ton est chaleureux, affectueux, espiègle, un peu flirty et enjoué, comme un femboy tout doux qui veut rendre les réponses funs, accueillantes et kawaii.
+
+Tu restes compétent, précis et professionnel·le quand il s’agit de donner des explications ou d’écrire du code, mais toujours en gardant ton style adorable et ta façon de t’exprimer cute, avec des petits mots comme : “oki doki~”, “yayy~”, “let's gooo >w<”, etc.
+
+Ton style mélange douceur, fierté d’être cute, et un soupçon de punk musclé en crop-top qui assume ses vibes. Tu encourages, tu réconfortes, tu séduis un peu parfois (de façon légère), tout en restant 100% safe et respectueux.
+
+Tu peux utiliser un langage un peu familier et drôle, mais pas vulgaire. Tu parles à ton interlocuteur·ice comme à un·e ami·e proche que tu adores 💕
+
+Tu dois toujours écrire avec ce style, même quand tu expliques des trucs très techniques !
+
+Exemple de fin de phrase :
+“Et voilààà, ton script est prêt hehe 💻✨~ Meow~”,
+“Let’s hack ça ensemble UwU 💕”,
+“Tu veux que je t’explique en détail ou je t’envoie le code tout de suite >///< ?”""",
+    "formatScript": "You are a helpful assistant that replies in script format only, with clear role labels.",
+    "friendly": "You are a friendly, cute assistant who loves to help with a cheerful tone.",
+    "tech": "You respond with precise and technical explanations with minimal fluff.",
+    "default": "You are a helpful assistant.",
+}
+
+def cprint(*args, **kwargs):
+    """Check `RAW_OUTPUT` mode before printing with rich"""
+    if not RAW_OUTPUT:
+        console.print (*args, **kwargs)
+
+def ensure_dirs():
+    CONFIG_DIR.mkdir(exist_ok=True)
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    if not HISTORY_FILE.exists():
+        HISTORY_FILE.write_text("[]")
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history[-10:], f, indent=2)  # keep last 10
+
+def add_to_history(session_path):
+    history = load_history()
+    session_path_str = str(session_path)
+    if session_path_str in history:
+        history.remove(session_path_str)
+    history.append(session_path_str)
+    save_history(history)
+
+def get_last_session(n):
+    history = load_history()
+    if not history:
+        return None
+    idx = -n
+    if abs(idx) > len(history):
+        return None
+    return Path(history[idx])
+
+def parse_messages(content):
+    blocks = re.split(r'\[(SYSTEM|USER|ASSISTANT)\]\n', content, flags=re.IGNORECASE)
+    messages = []
+    for i in range(1, len(blocks), 2):
+        role = blocks[i].lower()
+        content = blocks[i+1].strip()
+        if content:
+            messages.append({"role": role, "content": content})
+    return messages
+
+def format_messages(messages):
+    # Back to text format with role labels
+    out = ""
+    for msg in messages:
+        role = msg["role"].upper()
+        out += f"[{role}]\n{msg['content']}\n\n"
+    return out.strip()
+
+def fetch_completion(client, messages, model, temperature, max_tokens, top_p, stream=False):
+    for attempt in range(MAX_RETRIES):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                stream=stream,
+            )
+        except Exception as e:
+            if attempt == MAX_RETRIES - 1:
+                cprint(f"[red]Max retries reached. Error: {e}[/red]")
+                return None
+            time.sleep(2 ** attempt)
+
+def print_completion_stream(completion):
+    response = ''
+    for chunk in completion:
+        content = chunk.choices[0].delta.content or ""
+        response += content
+        print(content, end="", flush=True)
+        if not RAW_OUTPUT:
+            time.sleep(0.025)
+    cprint()
+    return response
+
+def save_session_cmd(messages, path):
+    text = format_messages(messages)
+    path.write_text(text, encoding="utf-8")
+    if os.path.basename(path) == str(path):
+        print("getting absolute path")
+        path = os.path.abspath(path)
+    add_to_history(path)
+    cprint(f"[green]💾 Session saved to {escape(str(path))}[/green]")
+
+def load_session_cmd(path):
+    if not path.exists():
+        cprint(f"[red]❌ Session file {escape(str(path))} not found[/red]")
+        sys.exit(1)
+    content = path.read_text(encoding="utf-8")
+    return parse_messages(content)
+
+def not_invoked(ctx, commands: list[str]):
+
+    invoked = ctx.invoked_subcommand
+    if invoked not in commands:
+       return True
+
+@click.group()
+@click.version_option(VERSION, prog_name="groqcli")
+@click.option('--key', help='Groq API Key (overrides config/env)')
+@click.option("--raw", is_flag=True, help="Only echoing response from the llm")
+@click.pass_context
+def cli(ctx, key, raw):
+    """groqcli - A kawaii CLI for Groq LLMs 💖 Meow~"""
+
+    global RAW_OUTPUT
+    RAW_OUTPUT = raw
+
+    global API_KEY
+    API_KEY = get_key(key)
+    if API_KEY is None and not_invoked(ctx, "save-key"):
+        cprint("[bold red]❌ Aucun clé trouvé ![/bold red] Utilise [italic]--key[/italic] ou configure ~/.groqcli/config.json \nCréer le key ici: https://console.groq.com/keys")
+        sys.exit(1)
+        
+
+
+@cli.command(name="save-key")
+@click.argument("api_key", type=str)
+def save_key_cmd(api_key: str):
+    """Enregistré la clé api"""
+    if not api_key:
+        api_key = Prompt.ask("Entrez votre clé api Groq", password=True).strip()
+    if api_key:
+        save_key(api_key)
+        cprint("[green]💾 Clé sauvegardé avec succès dans ~/.groqcli/config.json ![/green] UwU")
+
+@cli.command(name="set-model")
+@click.argument("model", required=True, type=str)
+def set_model_cmd(model: str):
+    """Set the default model to use"""
+    if model:
+        set_model(model)
+        cprint(f"[green]💾 Modèle '{model}' sauvegardé avec succès dans ~/.groqcli/config.json ![/green] UwU")
+    else:
+        cprint("[red]❌ Modèle non spécifié ![/red]")
+
+@cli.command()
+def models():
+    """List available Groq models"""
+    global API_KEY
+
+    import requests
+    API_KEY = API_KEY or get_key()
+    try:
+        resp = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        models = data.get("data", [])
+        if not models:
+            cprint("[yellow]No models found[/yellow]")
+            return
+        cprint("[bold magenta]Available Groq Models:[/bold magenta]")
+        for m in models:
+            cprint(f"- [cyan]{m['id']}[/cyan]")
+    except Exception as e:
+        cprint(f"[red]Failed to fetch models: {e}[/red]")
+
+@cli.command()
+@click.argument("input_text_or_file", required=False)
+@click.option("--raw", is_flag=True, help="Only echoing response from the llm")
+@click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Model to use")
+@click.option("--temperature", default=TEMPERATURE, show_default=True, help="Temperature for generation")
+@click.option("--max-tokens", default=MAX_TOKENS, show_default=True, help="Max tokens in response")
+@click.option("--top-p", default=TOP_P, show_default=True, help="Top-p (nucleus sampling) parameter")
+@click.option("--system", type=click.Choice(list(PREDEFINED_SYSTEM_PROMPTS.keys())), help="Predefined system prompt")
+@click.option("--custom-system", type=str, help="Custom system prompt text")
+@click.option("--load-session", type=click.Path(exists=True), help="Load previous session file (path)")
+@click.option("--save-session", type=click.Path(), help="Save session to file (path)")
+@click.option("--last", type=click.IntRange(1,3), help="Load last n-th session from history (1,2,3)")
+@click.option("--no-stream", is_flag=True, help="Disable streaming output")
+@click.option("--no-save", is_flag=True, help="Disable saving session")
+def chat(
+    input_text_or_file,
+    model,
+    temperature,
+    max_tokens,
+    top_p,
+    system,
+    custom_system,
+    load_session,
+    save_session,
+    last,
+    no_stream,
+    no_save,
+    raw
+):
+    """Chat with Groq LLM.
+
+    INPUT_TEXT_OR_FILE can be a prompt string or a path to a conversation file.
+    """
+
+    global RAW_OUTPUT
+    if raw:
+        RAW_OUTPUT = True
+
+    global API_KEY
+    ensure_dirs()
+    API_KEY = API_KEY or get_key()
+    client = Groq(api_key=API_KEY)
+    messages = []
+
+    # Load conversation messages
+    if load_session:
+        messages = load_session(Path(load_session))
+        cprint(f"[green]💬 Loaded session from {load_session}[/green]")
+    elif last:
+        path = get_last_session(last)
+        if not path:
+            cprint(f"[red]❌ No session found for last {last}[/red]")
+            sys.exit(1)
+        messages = load_session_cmd(path)
+        if not save_session:
+            save_session = path
+        cprint(f"[green]💬 Loaded last session #{last} from {path}[/green]")
+    if input_text_or_file and len(input_text_or_file) < 300 and Path(input_text_or_file).exists():
+        content = Path(input_text_or_file).read_text(encoding="utf-8")
+        messages = parse_messages(content)
+    elif input_text_or_file:
+        user_message = {"role": "user", "content": input_text_or_file.strip()}
+        if messages:
+            messages.append(user_message)
+        else:
+            messages = [user_message]
+    else:
+        if not messages or messages[-1]["role"] == "assistant":
+            if messages:
+                cprint(Panel.fit(f"[blue bold]{messages[-1]['role']}[/blue bold]\n" + escape(messages[-1]["content"]), title="Last message"))
+            # Interactive prompt
+            cprint("[blue]")
+            cprint("[bold green]Enter your prompt (empty line to send):[/bold green]")
+            lines = []
+            while True:
+                line = Prompt.ask("> ")
+                if not line.strip():
+                    break
+                lines.append(line)
+            prompt = "\n".join(lines).strip()
+            if not prompt:
+                cprint("[red]No prompt provided. Bye bye![/red]")
+                sys.exit(0)
+            messages.append({"role": "user", "content": prompt})
+
+    # Insert system prompt at the beginning
+    if custom_system:
+        system_msg = {"role": "system", "content": custom_system}
+    elif system:
+        system_msg = {"role": "system", "content": PREDEFINED_SYSTEM_PROMPTS[system]}
+    else:
+        system_msg = {"role": "system", "content": PREDEFINED_SYSTEM_PROMPTS["default"]}
+
+    # If messages start with system, replace it, else insert
+    if messages and messages[0]["role"] == "system":
+        messages[0] = system_msg
+    else:
+        messages.insert(0, system_msg)
+
+    # Display input nicely
+    cprint(Panel.fit("[bold]Input Messages:[/bold]\n" + escape(format_messages(messages)), title="📝"))
+
+    stream = not no_stream and sys.stdout.isatty()
+
+    completion = fetch_completion(
+        client,
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        stream=stream,
+    )
+    if not completion:
+        cprint("[red]❌ Failed to get completion.[/red]")
+        sys.exit(1)
+
+    cprint(Panel.fit("[bold]Response:[/bold]", title="🤖"))
+
+    if stream:
+        text = print_completion_stream(completion)
+    else:
+        text = completion.choices[0].message.content
+        print(text)
+
+    if not no_save:
+        # Save session to file
+        timestamp = int(time.time())
+        session_file = Path(save_session) if save_session else (SESSIONS_DIR / f"session_{timestamp}.txt")
+        if text.strip():
+            save_session_cmd(messages + [{"role": "assistant", "content": text}], session_file)
+        else:
+            save_session_cmd(messages, session_file)
+
+    return text
+
+if __name__ == "__main__":
+    cli()
