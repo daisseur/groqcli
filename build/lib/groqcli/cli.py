@@ -190,16 +190,6 @@ def set_system_cmd(key: str, system_prompt: str):
     else:
         cprint("[red]❌ Not enough arguments ![/red]")
 
-@cli.command(name="get-system")
-@click.argument("key", required=True, type=str)
-def get_system_cmd(key: str):
-    """Get a system prompt by its alias"""
-    system_prompt = get_system_prompt(key)
-    if system_prompt:
-        cprint(f"[blue]System prompt '{key}':[/blue]\n{system_prompt}")
-    else:
-        cprint(f"[red]❌ System prompt '{key}' not found ![/red]")
-
 @cli.command()
 def models():
     """List available Groq models"""

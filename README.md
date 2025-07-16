@@ -1,6 +1,6 @@
 # 🐾 GroqCLI ✨
 
-Un outil de ligne de commande modernisé pour parler avec les LLMs de Groq, avec style femboy kawaii~ 💅💖
+Un outil de ligne de commande modernisé pour parler avec les LLMs de Grog
 
 ## 🌟 Fonctionnalités
 
@@ -38,7 +38,7 @@ $ groqcli "Transforme ce script en TypeScript" --system formatScript
 $ groqcli resume --last 1
 ```
 
-## 🎀 Exemple de fichier
+## Exemple de fichier
 
 ```txt
 [SYSTEM]
@@ -47,11 +47,3 @@ Tu es un assistant très poli, concis et structuré.
 [USER]
 Explique-moi le fonctionnement d’un moteur à explosion.
 ```
-
-## ✨ Contribuer
-
-Tu veux ajouter un thème dark, un TUI, ou une voix cute ? Fais une PR ou glisse-moi une idée 🥺👉👈
-
----
-
-Meow merci d’utiliser GroqCLI 💖 UwU
